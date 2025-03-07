@@ -18,21 +18,226 @@ ConfigSync helps platform engineers and SREs manage configurations across multip
 
 ## Architecture
 
+ConfigSync follows a GitOps architecture pattern with several key components working together to provide a secure, efficient configuration management system for Kubernetes environments.
+
+### High-Level Architecture Overview
+
 ```
-┌─────────────┐     ┌──────────────┐     ┌───────────────┐
-│             │     │              │     │               │
-│  Git Repo   │────▶│  CI Pipeline │────▶│  GitOps       │
-│             │     │              │     │  Controller   │
-└─────────────┘     └──────────────┘     └───────┬───────┘
-                                                 │
-                                                 ▼
-                                         ┌───────────────┐
-                                         │               │
-                                         │  Kubernetes   │
-                                         │  Clusters     │
-                                         │               │
-                                         └───────────────┘
+┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                                                                                                     │
+│                                                  GIT REPOSITORY                                                      │
+│                                                                                                                     │
+│  ┌───────────────┐  ┌───────────────┐  ┌───────────────┐                     ┌────────────┐    ┌────────────────┐   │
+│  │ /configs/dev/ │  │/configs/stage/│  │ /configs/prod/│                     │   Branch   │    │  Pull Request  │   │
+│  │  - service A  │  │  - service A  │  │  - service A  │                     │ Protection │    │    Reviews     │   │
+│  │  - service B  │  │  - service B  │  │  - service B  │                     └────────────┘    └────────────────┘   │
+│  └───────────────┘  └───────────────┘  └───────────────┘                                                            │
+│                                                                                                                     │
+└───────────────┬─────────────────────────────────────────────────────────────┬─────────────────────────────────────┘
+                │                                                             │
+                │ Clone/Pull                                                  │ Webhook
+                │                                                             │
+                ▼                                                             ▼
+┌───────────────────────────────────────────────────────┐    ┌────────────────────────────────────────────────────────┐
+│                                                       │    │                                                          │
+│                   CI PIPELINE                         │    │                 SECURITY & POLICY                        │
+│                                                       │    │                                                          │
+│  ┌────────────┐  ┌────────────┐  ┌────────────────┐  │    │  ┌────────────┐  ┌─────────────┐  ┌────────────────┐    │
+│  │   Syntax   │  │  Schema    │  │ Dependency     │  │    │  │ Policy     │  │ Security    │  │ Approval       │    │
+│  │ Validation │→ │ Validation │→ │ Check          │  │    │  │ Enforcement│  │ Scanning    │  │ Workflows      │    │
+│  └────────────┘  └────────────┘  └────────────────┘  │    │  └────────────┘  └─────────────┘  └────────────────┘    │
+│        │                                │            │    │         ▲                ▲                ▲              │
+│        │                                │            │    │         │                │                │              │
+│        ▼                                ▼            │    │         │                │                │              │
+│  ┌────────────┐                ┌────────────────┐   │    │         │                │                │              │
+│  │  Dry-Run   │                │   Test         │   │    │         └────────────────┴────────────────┘              │
+│  │ Deployment │                │ Execution      │   │    │                                                          │
+│  └────────────┘                └────────────────┘   │    │                                                          │
+│                                                     │    │                                                          │
+└───────────────────────┬─────────────────────────────┘    └──────────────────────────────────────────────────────────┘
+                        │
+                        │ Validation Results
+                        │ (via Git status updates)
+                        │
+                        ▼
+┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                                                                                                     │
+│                                              GITOPS CONTROLLER                                                      │
+│                                                                                                                     │
+│  ┌───────────────────────────────────────────────┐        ┌─────────────────────────────────────────────────────┐  │
+│  │        ConfigSync Operator                    │        │                 Reconciliation Engine                │  │
+│  │  ┌─────────────┐     ┌───────────────────┐   │        │  ┌────────────────┐     ┌─────────────────────┐     │  │
+│  │  │ Custom CRD  │     │  ConfigSync       │   │        │  │ Desired State  │     │ State Comparison    │     │  │
+│  │  │ Resources   │     │  Controller       │   │        │  │ (from Git)     │◀──▶ │ & Diff Generation   │     │  │
+│  │  └─────────────┘     └───────────────────┘   │        │  └────────────────┘     └─────────────────────┘     │  │
+│  │         ▲                      │             │        │             │                      │                │  │
+│  │         │                      │             │        │             │                      │                │  │
+│  │         │                      ▼             │        │             ▼                      ▼                │  │
+│  │  ┌──────┴────────┐   ┌─────────────────┐    │        │  ┌─────────────────┐    ┌──────────────────────┐   │  │
+│  │  │ Status        │   │ Event           │    │        │  │ Actual State    │    │ Configuration        │   │  │
+│  │  │ Reporter      │◀──│ Handler         │    │        │  │ (from Cluster)  │◀───│ Applier             │   │  │
+│  │  └───────────────┘   └─────────────────┘    │        │  └─────────────────┘    └──────────────────────┘   │  │
+│  │                                             │        │                                                    │  │
+│  └─────────────────────┬─────────────────────────────────┘  │  ┌─────────────────────┐    ┌───────────────────┐    │  │
+│                        │                       │           │  │ Drift Detection     │    │ Remediation        │    │  │
+│                        │                       │           │  │ Service             │───▶│ Controller         │    │  │
+│                        │                       │           │  └─────────────────────┘    └───────────────────┘    │  │
+│                        │                       │           │                                                      │  │
+│                        │                       │           └──────────────────────────────────────────────────────┘  │
+│                        │                       │                                                                     │
+└────────────────────────┼───────────────────────┼─────────────────────────────────────────────────────────────────────┘
+                         │                       │
+                         │ Apply                 │ Monitor
+                         │ Changes               │ State
+                         │                       │
+                         ▼                       ▼
+┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                                                                                                     │
+│                                             KUBERNETES CLUSTERS                                                     │
+│                                                                                                                     │
+│  ┌─────────────────────────┐  ┌─────────────────────────┐  ┌─────────────────────────┐                             │
+│  │     DEV ENVIRONMENT     │  │    STAGING ENVIRONMENT  │  │    PROD ENVIRONMENT     │                             │
+│  │  ┌─────────┐ ┌────────┐ │  │  ┌─────────┐ ┌────────┐ │  │  ┌─────────┐ ┌────────┐ │                             │
+│  │  │ Cluster │ │Cluster │ │  │  │ Cluster │ │Cluster │ │  │  │ Cluster │ │Cluster │ │                             │
+│  │  │   Dev1  │ │  Dev2  │ │  │  │  Stage1 │ │ Stage2 │ │  │  │  Prod1  │ │ Prod2  │ │                             │
+│  │  └─────────┘ └────────┘ │  │  └─────────┘ └────────┘ │  │  └─────────┘ └────────┘ │                             │
+│  │                         │  │                         │  │                         │                             │
+│  │  ┌───────────────────┐  │  │  ┌───────────────────┐  │  │  ┌───────────────────┐  │                             │
+│  │  │  Environment      │  │  │  │  Environment      │  │  │  │  Environment      │  │                             │
+│  │  │  Configuration    │  │  │  │  Configuration    │  │  │  │  Configuration    │  │                             │
+│  │  └───────────────────┘  │  │  └───────────────────┘  │  │  └───────────────────┘  │                             │
+│  │                         │  │                         │  │                         │                             │
+│  └─────────────────────────┘  └─────────────────────────┘  └─────────────────────────┘                             │
+│                                                                                                                     │
+│  ┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────┐   │
+│  │                                         MONITORING & OBSERVABILITY                                           │   │
+│  │                                                                                                             │   │
+│  │  ┌────────────┐  ┌────────────┐  ┌────────────┐  ┌─────────────────┐  ┌─────────────────┐  ┌────────────┐  │   │
+│  │  │ Prometheus │  │  Grafana   │  │  Alerting  │  │ Drift Detection │  │ Status Reporting│  │   Audit    │  │   │
+│  │  │ Metrics    │  │ Dashboards │  │   System   │  │    Events       │  │    System       │  │   Logs     │  │   │
+│  │  └────────────┘  └────────────┘  └────────────┘  └─────────────────┘  └─────────────────┘  └────────────┘  │   │
+│  │                                                                                                             │   │
+│  └─────────────────────────────────────────────────────────────────────────────────────────────────────────────┘   │
+│                                                                                                                     │
+└─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
+
+### Detailed Component Architecture
+
+#### 1. Git Repository
+
+The Git repository is the single source of truth for all configuration changes in ConfigSync:
+
+- **Structure**: 
+  - `/configs`: Root directory for all configuration files
+    - `/dev`: Development environment configurations
+    - `/staging`: Staging environment configurations 
+    - `/prod`: Production environment configurations
+  - Each environment directory contains Kubernetes manifests, Helm charts, or Kustomize configurations
+
+- **Change Process**:
+  - Engineers create branches and submit Pull Requests to propose configuration changes
+  - Each change includes detailed metadata about the purpose and impact of the change
+  - Code owners and reviewers provide feedback and approvals through the Git platform
+
+- **Security**:
+  - Branch protection rules prevent direct changes to main/protected branches
+  - Signed commits ensure authenticity of changes
+  - Access control integrated with organization identity management
+
+#### 2. CI Pipeline
+
+The Continuous Integration pipeline validates configuration changes before they are applied:
+
+- **Validation Stages**:
+  - **Syntax Validation**: Ensures configuration files are valid YAML/JSON
+  - **Schema Validation**: Confirms resources conform to Kubernetes API schemas
+  - **Policy Compliance**: Verifies configurations meet organization security policies
+  - **Dependency Checks**: Ensures all required resources exist and are properly referenced
+  - **Dry-Run Deployments**: Simulates applying configurations to detect potential issues
+
+- **Implementation**:
+  - Uses GitHub Actions/GitLab CI for pipeline execution
+  - Custom validation tools and scripts for specialized checks
+  - Integration with policy enforcement tools (OPA, Kyverno)
+
+#### 3. GitOps Controller
+
+The GitOps Controller manages the deployment of configurations to Kubernetes clusters:
+
+- **Components**:
+  - **ConfigSync Operator**: Custom Kubernetes operator monitoring ConfigSync resources
+  - **Reconciliation Engine**: Compares desired state in Git with actual state in clusters
+  - **Drift Detection**: Identifies and corrects unauthorized changes to resources
+  - **Status Reporter**: Updates Git repository with deployment status and results
+
+- **Workflow**:
+  - Periodically polls Git repository for changes
+  - Calculates differences between desired and actual state
+  - Applies changes in controlled manner with proper sequencing
+  - Records audit logs of all operations performed
+
+- **Integration Points**:
+  - Integrates with ArgoCD or Flux for the core GitOps functionality
+  - Extends standard GitOps controllers with ConfigSync-specific capabilities
+
+#### 4. Kubernetes Clusters
+
+The target environments where configurations are applied:
+
+- **Multi-Environment Support**:
+  - Development, staging, and production clusters with appropriate isolation
+  - Different deployment strategies and approval processes per environment
+  - Environment-specific configuration overlays and variables
+
+- **Multi-Cluster Architecture**:
+  - Support for multiple clusters per environment
+  - Consistent configuration across clusters with environment-specific overrides
+  - Central monitoring and reporting of configuration status
+
+### Data Flow
+
+1. **Configuration Creation/Update**:
+   - Engineers commit changes to a feature branch in the Git repository
+   - A Pull Request is created for review and approval
+
+2. **Validation Process**:
+   - CI pipeline triggers automatically on Pull Request
+   - Runs all validation checks against the proposed changes
+   - Reports results back to the Pull Request
+
+3. **Approval Workflow**:
+   - Reviewers evaluate changes and CI results
+   - Approvals required based on environment sensitivity
+   - Changes to production require additional signoff
+
+4. **Deployment Execution**:
+   - After merge to the main branch, GitOps controller detects changes
+   - Configurations are applied to the appropriate environment
+   - Status and results are reported back to Git repository
+
+5. **Monitoring and Remediation**:
+   - Drift detection continuously monitors for unauthorized changes
+   - Automatic remediation returns resources to desired state
+   - Alerts generated for persistent or critical drift issues
+
+### Security Architecture
+
+- **Least Privilege Access**: Each component operates with minimal required permissions
+- **Secrets Management**: Integration with secure secrets management solutions
+- **Audit Trail**: Comprehensive logging of all system activities
+- **RBAC Integration**: Role-based access mapped to organization structure
+- **Approval Gates**: Multi-level approvals for sensitive environments
+
+### Implementation Details
+
+The ConfigSync system is implemented using:
+
+- **Operator Pattern**: Custom Kubernetes operator for core functionality
+- **Controller-Runtime**: Kubernetes controller framework for reconciliation logic
+- **WebHooks**: Admission controllers for policy enforcement
+- **Event System**: Asynchronous event handling for operations
+- **API Integration**: RESTful APIs for system status and control
 
 ## Technologies
 
