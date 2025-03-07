@@ -260,8 +260,8 @@ The ConfigSync system is implemented using:
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/yourusername/config-sync.git
-   cd config-sync
+   git clone https://github.com/jaffarkeikei/ConfigSync.git
+   cd ConfigSync
    ```
 
 2. Install the required components:
