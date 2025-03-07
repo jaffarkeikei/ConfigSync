@@ -1,0 +1,13 @@
+apiVersion: configsync.io/v1alpha1
+kind: ConfigSync
+metadata:
+  name: example-configsync
+  namespace: default
+spec:
+  gitRepository: "https://github.com/yourusername/config-repo.git"
+  branch: "main"
+  path: "configs"
+  environment: "development"
+  syncInterval: "5m"
+  autoApprove: false
+  driftDetection: true 

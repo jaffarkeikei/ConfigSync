@@ -1,0 +1,70 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sample-app
+  namespace: default
+  labels:
+    app: sample-app
+    environment: dev
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: sample-app
+  template:
+    metadata:
+      labels:
+        app: sample-app
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:latest
+        ports:
+        - containerPort: 80
+        resources:
+          limits:
+            cpu: "200m"
+            memory: "256Mi"
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sample-app
+  namespace: default
+  labels:
+    app: sample-app
+    environment: dev
+spec:
+  ports:
+  - port: 80
+    targetPort: 80
+    protocol: TCP
+    name: http
+  selector:
+    app: sample-app
+  type: ClusterIP
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sample-app-config
+  namespace: default
+  labels:
+    app: sample-app
+    environment: dev
+data:
+  app.config: |
+    # Sample application configuration
+    server:
+      port: 80
+      maxConnections: 100
+    
+    logging:
+      level: debug
+      
+    features:
+      featureA: true
+      featureB: false 

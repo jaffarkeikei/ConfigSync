@@ -1,0 +1,186 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: configsync-system
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: configsync-operator
+  namespace: configsync-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: configsync-operator
+rules:
+- apiGroups: ["configsync.io"]
+  resources: ["configsyncs", "configsyncs/status"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: [""]
+  resources: ["services", "configmaps", "secrets", "namespaces"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: configsync-operator
+subjects:
+- kind: ServiceAccount
+  name: configsync-operator
+  namespace: configsync-system
+roleRef:
+  kind: ClusterRole
+  name: configsync-operator
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: configsyncs.configsync.io
+spec:
+  group: configsync.io
+  names:
+    kind: ConfigSync
+    listKind: ConfigSyncList
+    plural: configsyncs
+    singular: configsync
+    shortNames:
+    - cs
+  scope: Namespaced
+  versions:
+  - name: v1alpha1
+    served: true
+    storage: true
+    schema:
+      openAPIV3Schema:
+        type: object
+        properties:
+          spec:
+            type: object
+            required: ["gitRepository", "path", "environment"]
+            properties:
+              gitRepository:
+                type: string
+                description: "URL of the Git repository containing configurations"
+              branch:
+                type: string
+                description: "Git branch to use (defaults to main)"
+              path:
+                type: string
+                description: "Path within the Git repository where configurations are stored"
+              environment:
+                type: string
+                description: "Specifies which environment this ConfigSync instance manages"
+                enum: ["development", "staging", "production"]
+              syncInterval:
+                type: string
+                description: "How often to check for changes in Git"
+                default: "5m"
+              autoApprove:
+                type: boolean
+                description: "Whether to automatically apply changes"
+                default: false
+              driftDetection:
+                type: boolean
+                description: "Enables detection and remediation of configuration drift"
+                default: true
+          status:
+            type: object
+            properties:
+              lastSyncTime:
+                type: string
+                format: date-time
+                description: "Time of the last successful sync"
+              lastCommitID:
+                type: string
+                description: "Git commit ID that was last synced"
+              conditions:
+                type: array
+                items:
+                  type: object
+                  required: ["type", "status"]
+                  properties:
+                    type:
+                      type: string
+                      description: "Type of ConfigSync condition"
+                    status:
+                      type: string
+                      description: "Status of the condition, one of True, False, Unknown"
+                    lastTransitionTime:
+                      type: string
+                      format: date-time
+                      description: "Last time the condition transitioned from one status to another"
+                    reason:
+                      type: string
+                      description: "Reason for the condition's last transition"
+                    message:
+                      type: string
+                      description: "Human-readable message about condition"
+    subresources:
+      status: {}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: configsync-operator
+  namespace: configsync-system
+  labels:
+    app: configsync-operator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: configsync-operator
+  template:
+    metadata:
+      labels:
+        app: configsync-operator
+    spec:
+      serviceAccountName: configsync-operator
+      containers:
+      - name: operator
+        image: configsync/operator:latest
+        imagePullPolicy: IfNotPresent
+        args:
+        - "--metrics-addr=:8080"
+        - "--enable-leader-election"
+        ports:
+        - containerPort: 8080
+          name: metrics
+        resources:
+          limits:
+            cpu: 100m
+            memory: 128Mi
+          requests:
+            cpu: 50m
+            memory: 64Mi
+        env:
+        - name: WATCH_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: OPERATOR_NAME
+          value: "configsync-operator"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: configsync-metrics
+  namespace: configsync-system
+  labels:
+    app: configsync-operator
+spec:
+  ports:
+  - port: 8080
+    targetPort: metrics
+    name: metrics
+  selector:
+    app: configsync-operator 
